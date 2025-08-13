@@ -6,6 +6,8 @@ import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { Server } from "http";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Logger } from "./utils/logger.js";
+import { setGlobalDispatcher } from "undici";
+import { dispatcher } from "./proxy.js";
 
 let httpServer: Server | null = null;
 const transports = {
@@ -15,6 +17,8 @@ const transports = {
 
 export async function startHttpServer(port: number, mcpServer: McpServer): Promise<void> {
   const app = express();
+
+  setGlobalDispatcher(dispatcher);
 
   // Parse JSON requests for the Streamable HTTP endpoint only, will break SSE endpoint
   app.use("/mcp", express.json());
