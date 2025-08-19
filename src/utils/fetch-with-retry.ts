@@ -1,4 +1,5 @@
 import { exec } from "child_process";
+import fetchWithProxy from "fetch-with-proxy";
 import { promisify } from "util";
 import { Logger } from "./logger.js";
 
@@ -15,7 +16,18 @@ type RequestOptions = RequestInit & {
 
 export async function fetchWithRetry<T>(url: string, options: RequestOptions = {}): Promise<T> {
   try {
-    const response = await fetch(url, options);
+    const isUseProxy = process.env.HTTP_PROXY || process.env.HTTPS_PROXY
+
+    if (process.env.HTTP_PROXY) {
+      console.log("Used HTTP proxy: ", process.env.HTTP_PROXY);
+    }
+
+    if (process.env.HTTPS_PROXY) {
+      console.log("Used HTTPS proxy: ", process.env.HTTPS_PROXY);
+    }
+
+    const fetchMethod = isUseProxy ? fetchWithProxy : fetch
+    const response = await fetchMethod(url, options);
 
     if (!response.ok) {
       throw new Error(`Fetch failed with status ${response.status}: ${response.statusText}`);
