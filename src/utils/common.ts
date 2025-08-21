@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import { Agent, fetch, ProxyAgent } from "undici";
 
 export type StyleId = `${string}_${string}` & { __brand: "StyleId" };
 
@@ -25,9 +26,12 @@ export async function downloadFigmaImage(
     // Build the complete file path
     const fullPath = path.join(localPath, fileName);
 
+    const PROXY = process.env.HTTPS_PROXY ?? process.env.HTTP_PROXY;
+    const via = PROXY ? new ProxyAgent(PROXY) : new Agent();
     // Use fetch to download the image
     const response = await fetch(imageUrl, {
       method: "GET",
+      dispatcher: PROXY ? via : undefined
     });
 
     if (!response.ok) {
