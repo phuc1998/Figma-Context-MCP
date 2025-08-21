@@ -1,10 +1,11 @@
 import { exec } from "child_process";
 import { promisify } from "util";
 import { Logger } from "./logger.js";
+import { Agent, fetch, ProxyAgent, type RequestInit as UndiciInit } from "undici";
 
 const execAsync = promisify(exec);
 
-type RequestOptions = RequestInit & {
+type RequestOptions = Omit<UndiciInit, "headers"> & {
   /**
    * Force format of headers to be a record of strings, e.g. { "Authorization": "Bearer 123" }
    *
@@ -15,7 +16,11 @@ type RequestOptions = RequestInit & {
 
 export async function fetchWithRetry<T>(url: string, options: RequestOptions = {}): Promise<T> {
   try {
-    const response = await fetch(url, options);
+
+    const PROXY = process.env.HTTPS_PROXY ?? process.env.HTTP_PROXY;
+    const via = PROXY ? new ProxyAgent(PROXY) : new Agent();
+
+    const response = await fetch(url, { ...options, dispatcher: PROXY ? via : undefined });
 
     if (!response.ok) {
       throw new Error(`Fetch failed with status ${response.status}: ${response.statusText}`);
