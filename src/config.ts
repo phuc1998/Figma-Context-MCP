@@ -150,12 +150,11 @@ export function getServerConfig(isStdioMode: boolean): ServerConfig {
     config.configSources.skipImageDownloads = "env";
   }
 
-  // Validate configuration
+  // Validate configuration - API key is now optional since it can be provided via Redis session
   if (!auth.figmaApiKey && !auth.figmaOAuthToken) {
-    console.error(
-      "Either FIGMA_API_KEY or FIGMA_OAUTH_TOKEN is required (via CLI argument or .env file)",
+    console.warn(
+      "Warning: No FIGMA_API_KEY or FIGMA_OAUTH_TOKEN configured. API key will need to be provided via session_hash parameter in tool calls.",
     );
-    process.exit(1);
   }
 
   // Log configuration sources

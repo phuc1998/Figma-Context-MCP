@@ -23,6 +23,12 @@ const parameters = {
     .describe(
       "OPTIONAL. Do NOT use unless explicitly requested by the user. Controls how many levels deep to traverse the node tree.",
     ),
+  sessionHash: z
+    .string()
+    .optional()
+    .describe(
+      "The session hash often found in a parameter named session_hash",
+    ),
 };
 
 const parametersSchema = z.object(parameters);
@@ -35,7 +41,7 @@ async function getFigmaData(
   outputFormat: "yaml" | "json",
 ) {
   try {
-    const { fileKey, nodeId, depth } = params;
+    const { fileKey, nodeId, depth, sessionHash } = params;
 
     Logger.log(
       `Fetching ${depth ? `${depth} layers deep` : "all layers"} of ${
@@ -46,9 +52,9 @@ async function getFigmaData(
     // Get raw Figma API response
     let rawApiResponse: GetFileResponse | GetFileNodesResponse;
     if (nodeId) {
-      rawApiResponse = await figmaService.getRawNode(fileKey, nodeId, depth);
+      rawApiResponse = await figmaService.getRawNode(fileKey, nodeId, depth, sessionHash);
     } else {
-      rawApiResponse = await figmaService.getRawFile(fileKey, depth);
+      rawApiResponse = await figmaService.getRawFile(fileKey, depth, sessionHash);
     }
 
     // Use unified design extraction (handles nodes + components consistently)
