@@ -52,7 +52,13 @@ const parameters = {
   localPath: z
     .string()
     .describe(
-      "The absolute path to the directory where images are stored in the project. If the directory does not exist, it will be created. The format of this path should respect the directory format of the operating system you are running on. Don't use any special character escaping in the path name either.",
+      "The absolute path to the directory where images are stored in the project. If the directory does not exist, it will be created. The format of this path should respect the directory format of the operating system you are running on. Do not use any special character escaping in the path name either.",
+    ),
+  sessionHash: z
+    .string()
+    .optional()
+    .describe(
+      "The session hash often found in a parameter named session_hash",
     ),
 };
 
@@ -62,7 +68,7 @@ export type DownloadImagesParams = z.infer<typeof parametersSchema>;
 // Enhanced handler function with image processing support
 async function downloadFigmaImages(params: DownloadImagesParams, figmaService: FigmaService) {
   try {
-    const { fileKey, nodes, localPath, pngScale = 2 } = params;
+    const { fileKey, nodes, localPath, pngScale = 2, sessionHash } = params;
 
     // Process nodes: collect unique downloads and track which requests they satisfy
     const downloadItems = [];
@@ -118,7 +124,7 @@ async function downloadFigmaImages(params: DownloadImagesParams, figmaService: F
 
     const allDownloads = await figmaService.downloadImages(fileKey, localPath, downloadItems, {
       pngScale,
-    });
+    }, sessionHash);
 
     const successCount = allDownloads.filter(Boolean).length;
 

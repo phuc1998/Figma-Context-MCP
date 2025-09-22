@@ -8,6 +8,7 @@ import { downloadFigmaImage } from "~/utils/common.js";
 import { downloadAndProcessImage, type ImageProcessingResult } from "~/utils/image-processing.js";
 import { Logger, writeLogs } from "~/utils/logger.js";
 import { fetchWithRetry } from "~/utils/fetch-with-retry.js";
+import { redisService } from "./redis.js";
 
 export type FigmaAuthOptions = {
   figmaApiKey: string;
@@ -33,13 +34,34 @@ export class FigmaService {
     this.useOAuth = !!useOAuth && !!this.oauthToken;
   }
 
-  private getAuthHeaders(): Record<string, string> {
+  private async getAuthHeaders(sessionHash?: string): Promise<Record<string, string>> {
     if (this.useOAuth) {
       Logger.log("Using OAuth Bearer token for authentication");
       return { Authorization: `Bearer ${this.oauthToken}` };
     } else {
+      let apiKey = this.apiKey;
+      
+      // If session_hash is provided, try to get API key from Redis
+      if (sessionHash) {
+        try {
+          const redisApiKey = await redisService.getFigmaApiKey(sessionHash);
+          if (redisApiKey) {
+            apiKey = redisApiKey;
+            Logger.log("Using API key from Redis session");
+          } else {
+            Logger.log("No API key found in Redis for session, falling back to configured API key");
+          }
+        } catch (error) {
+          Logger.error("Error retrieving API key from Redis, falling back to configured API key:", error);
+        }
+      }
+
+      if (!apiKey) {
+        throw new Error("No Figma API key available. Either provide session_hash with valid Redis key or configure --figma-api-key");
+      }
+
       Logger.log("Using Personal Access Token for authentication");
-      return { "X-Figma-Token": this.apiKey };
+      return { "X-Figma-Token": apiKey };
     }
   }
 
@@ -56,10 +78,10 @@ export class FigmaService {
     >;
   }
 
-  private async request<T>(endpoint: string): Promise<T> {
+  private async request<T>(endpoint: string, sessionHash?: string): Promise<T> {
     try {
       Logger.log(`Calling ${this.baseUrl}${endpoint}`);
-      const headers = this.getAuthHeaders();
+      const headers = await this.getAuthHeaders(sessionHash);
 
       return await fetchWithRetry<T>(`${this.baseUrl}${endpoint}`, { headers });
     } catch (error) {
@@ -89,9 +111,9 @@ export class FigmaService {
    *
    * @returns Map of imageRef to download URL
    */
-  async getImageFillUrls(fileKey: string): Promise<Record<string, string>> {
+  async getImageFillUrls(fileKey: string, sessionHash?: string): Promise<Record<string, string>> {
     const endpoint = `/files/${fileKey}/images`;
-    const response = await this.request<GetImageFillsResponse>(endpoint);
+    const response = await this.request<GetImageFillsResponse>(endpoint, sessionHash);
     return response.meta.images || {};
   }
 
@@ -105,13 +127,14 @@ export class FigmaService {
     nodeIds: string[],
     format: "png" | "svg",
     options: { pngScale?: number; svgOptions?: SvgOptions } = {},
+    sessionHash?: string,
   ): Promise<Record<string, string>> {
     if (nodeIds.length === 0) return {};
 
     if (format === "png") {
       const scale = options.pngScale || 2;
       const endpoint = `/images/${fileKey}?ids=${nodeIds.join(",")}&format=png&scale=${scale}`;
-      const response = await this.request<GetImagesResponse>(endpoint);
+      const response = await this.request<GetImagesResponse>(endpoint, sessionHash);
       return this.filterValidImages(response.images);
     } else {
       const svgOptions = options.svgOptions || {
@@ -121,7 +144,7 @@ export class FigmaService {
       };
       const params = this.buildSvgQueryParams(nodeIds, svgOptions);
       const endpoint = `/images/${fileKey}?${params}`;
-      const response = await this.request<GetImagesResponse>(endpoint);
+      const response = await this.request<GetImagesResponse>(endpoint, sessionHash);
       return this.filterValidImages(response.images);
     }
   }
@@ -149,6 +172,7 @@ export class FigmaService {
       requiresImageDimensions?: boolean;
     }>,
     options: { pngScale?: number; svgOptions?: SvgOptions } = {},
+    sessionHash?: string,
   ): Promise<ImageProcessingResult[]> {
     if (items.length === 0) return [];
 
@@ -165,7 +189,7 @@ export class FigmaService {
 
     // Download image fills with processing
     if (imageFills.length > 0) {
-      const fillUrls = await this.getImageFillUrls(fileKey);
+      const fillUrls = await this.getImageFillUrls(fileKey, sessionHash);
       const fillDownloads = imageFills
         .map(({ imageRef, fileName, needsCropping, cropTransform, requiresImageDimensions }) => {
           const imageUrl = fillUrls[imageRef];
@@ -199,6 +223,7 @@ export class FigmaService {
           pngNodes.map((n) => n.nodeId),
           "png",
           { pngScale },
+          sessionHash,
         );
         const pngDownloads = pngNodes
           .map(({ nodeId, fileName, needsCropping, cropTransform, requiresImageDimensions }) => {
@@ -228,6 +253,7 @@ export class FigmaService {
           svgNodes.map((n) => n.nodeId),
           "svg",
           { svgOptions },
+          sessionHash,
         );
         const svgDownloads = svgNodes
           .map(({ nodeId, fileName, needsCropping, cropTransform, requiresImageDimensions }) => {
@@ -258,11 +284,11 @@ export class FigmaService {
   /**
    * Get raw Figma API response for a file (for use with flexible extractors)
    */
-  async getRawFile(fileKey: string, depth?: number | null): Promise<GetFileResponse> {
+  async getRawFile(fileKey: string, depth?: number | null, sessionHash?: string): Promise<GetFileResponse> {
     const endpoint = `/files/${fileKey}${depth ? `?depth=${depth}` : ""}`;
     Logger.log(`Retrieving raw Figma file: ${fileKey} (depth: ${depth ?? "default"})`);
 
-    const response = await this.request<GetFileResponse>(endpoint);
+    const response = await this.request<GetFileResponse>(endpoint, sessionHash);
     writeLogs("figma-raw.json", response);
 
     return response;
@@ -275,13 +301,14 @@ export class FigmaService {
     fileKey: string,
     nodeId: string,
     depth?: number | null,
+    sessionHash?: string,
   ): Promise<GetFileNodesResponse> {
     const endpoint = `/files/${fileKey}/nodes?ids=${nodeId}${depth ? `&depth=${depth}` : ""}`;
     Logger.log(
       `Retrieving raw Figma node: ${nodeId} from ${fileKey} (depth: ${depth ?? "default"})`,
     );
 
-    const response = await this.request<GetFileNodesResponse>(endpoint);
+    const response = await this.request<GetFileNodesResponse>(endpoint, sessionHash);
     writeLogs("figma-raw.json", response);
 
     return response;
