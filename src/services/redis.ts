@@ -1,4 +1,4 @@
-import Redis from "redis";
+import { Redis } from "ioredis";
 import { Logger } from "../utils/logger.js";
 
 export interface RedisSingleConfig {
@@ -17,13 +17,14 @@ export interface RedisSentinelConfig {
   }>;
   name: string;
   db?: number;
-  password?: string;
+  password?: string; // Password for Redis master/slave
+  sentinelPassword?: string; // Password for Sentinel nodes
 }
 
 export type RedisConfig = RedisSingleConfig | RedisSentinelConfig;
 
 export class RedisService {
-  private client: Redis.RedisClientType | Redis.RedisSentinelType;
+  private client: Redis;
   private isConnected = false;
   private config: RedisConfig;
 
@@ -31,8 +32,9 @@ export class RedisService {
     this.config = config || this.getConfigFromEnv();
     this.client = this.createClient();
 
-    this.client.on("error", (err) => {
+    this.client.on("error", (err: Error) => {
       Logger.error("Redis Client Error:", err);
+      this.isConnected = false;
     });
 
     this.client.on("connect", () => {
@@ -40,8 +42,18 @@ export class RedisService {
       this.isConnected = true;
     });
 
-    this.client.on("disconnect", () => {
+    this.client.on("ready", () => {
+      Logger.log("Redis client ready");
+      this.isConnected = true;
+    });
+
+    this.client.on("close", () => {
       Logger.log("Redis client disconnected");
+      this.isConnected = false;
+    });
+
+    this.client.on("end", () => {
+      Logger.log("Redis client connection ended");
       this.isConnected = false;
     });
   }
@@ -54,7 +66,7 @@ export class RedisService {
       const name = process.env.REDIS_SENTINEL_NAME || 'mymaster';
       
       if (sentinels.length === 0) {
-        throw new Error('REDIS_SENTINELS environment variable is required for sentinel mode');
+        throw new Error('REDIS_SENTINEL_HOSTS environment variable is required for sentinel mode');
       }
 
       return {
@@ -62,7 +74,8 @@ export class RedisService {
         sentinels,
         name,
         db: parseInt(process.env.REDIS_DB || '0', 10),
-        password: process.env.REDIS_PASSWORD,
+        password: process.env.REDIS_PASSWORD, // Password for Redis master/slave
+        sentinelPassword: process.env.REDIS_SENTINEL_PASSWORD, // Password for Sentinel nodes
       };
     } else {
       return {
@@ -76,7 +89,7 @@ export class RedisService {
   }
 
   private parseSentinelsFromEnv(): Array<{ host: string; port: number }> {
-    const sentinelsStr = process.env.REDIS_SENTINELS;
+    const sentinelsStr = process.env.REDIS_SENTINEL_HOSTS;
     if (!sentinelsStr) {
       return [];
     }
@@ -90,25 +103,33 @@ export class RedisService {
     });
   }
 
-  private createClient(): Redis.RedisClientType | Redis.RedisSentinelType {
+  private createClient(): Redis {
     if (this.config.mode === 'sentinel') {
-      // For Redis client v5, use createSentinel for Sentinel mode
-      return Redis.createSentinel({
+      // For ioredis, use Sentinel mode
+      const sentinelConfig: any = {
+        sentinels: this.config.sentinels,
         name: this.config.name,
-        sentinelRootNodes: this.config.sentinels,
-        nodeClientOptions: {
-          database: this.config.db,
-          password: this.config.password,
-        },
-      });
+        db: this.config.db,
+        password: this.config.password, // Password for Redis master/slave
+        lazyConnect: true, // Don't connect immediately
+        maxRetriesPerRequest: 3,
+      };
+
+      // Add Sentinel password if provided
+      if (this.config.sentinelPassword) {
+        sentinelConfig.sentinelPassword = this.config.sentinelPassword;
+      }
+
+      return new Redis(sentinelConfig);
     } else {
-      return Redis.createClient({
-        socket: {
-          host: this.config.host,
-          port: this.config.port,
-        },
-        database: this.config.db,
+      // For single Redis instance
+      return new Redis({
+        host: this.config.host,
+        port: this.config.port,
+        db: this.config.db,
         password: this.config.password,
+        lazyConnect: true, // Don't connect immediately
+        maxRetriesPerRequest: 3,
       });
     }
   }
@@ -116,6 +137,8 @@ export class RedisService {
   async connect(): Promise<void> {
     if (!this.isConnected) {
       try {
+        // ioredis connects automatically when first command is issued
+        // or we can explicitly connect
         await this.client.connect();
         Logger.log("Successfully connected to Redis");
       } catch (error) {
@@ -126,10 +149,9 @@ export class RedisService {
   }
 
   async disconnect(): Promise<void> {
-    if (this.isConnected) {
+    if (this.isConnected || this.client.status !== 'end') {
       try {
-        // Use quit() method for Redis client v5
-        await (this.client as any).quit();
+        await this.client.quit();
         Logger.log("Successfully disconnected from Redis");
       } catch (error) {
         Logger.error("Failed to disconnect from Redis:", error);
@@ -145,14 +167,15 @@ export class RedisService {
    */
   async getFigmaApiKey(sessionHash: string): Promise<string | null> {
     try {
-      if (!this.isConnected) {
+      // ioredis will auto-connect if not connected
+      if (!this.isConnected && this.client.status === 'end') {
         await this.connect();
       }
 
       Logger.log(`Retrieving Figma API key for session hash: ${sessionHash}`);
       
-      // Handle both regular client and sentinel client
-      const apiKey = await (this.client as any).get(sessionHash);
+      // ioredis has native TypeScript support and proper return types
+      const apiKey = await this.client.get(sessionHash);
       
       if (apiKey) {
         Logger.log(`Successfully retrieved API key for session: ${sessionHash}`);
@@ -171,7 +194,7 @@ export class RedisService {
    * Check if Redis connection is active
    */
   get connected(): boolean {
-    return this.isConnected;
+    return this.isConnected && this.client.status === 'ready';
   }
 }
 

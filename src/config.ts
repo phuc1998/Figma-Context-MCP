@@ -31,7 +31,7 @@ function getRedisConfigFromEnv(): RedisConfig | undefined {
   const REDIS_MODE = process.env.REDIS_MODE || 'single';
   
   if (REDIS_MODE === 'sentinel') {
-    const sentinelsStr = process.env.REDIS_SENTINELS;
+    const sentinelsStr = process.env.REDIS_SENTINEL_HOSTS;
     if (!sentinelsStr) {
       return undefined;
     }
@@ -49,7 +49,8 @@ function getRedisConfigFromEnv(): RedisConfig | undefined {
       sentinels,
       name: process.env.REDIS_SENTINEL_NAME || 'mymaster',
       db: parseInt(process.env.REDIS_DB || '0', 10),
-      password: process.env.REDIS_PASSWORD,
+      password: process.env.REDIS_PASSWORD, // Password for Redis master/slave
+      sentinelPassword: process.env.REDIS_SENTINEL_PASSWORD, // Password for Sentinel nodes
     };
   } else {
     return {
@@ -226,8 +227,11 @@ export function getServerConfig(isStdioMode: boolean): ServerConfig {
     if (config.redis) {
       if (config.redis.mode === 'sentinel') {
         console.log(`- REDIS_MODE: sentinel (source: ${config.configSources.redis})`);
-        console.log(`- REDIS_SENTINELS: ${config.redis.sentinels.map(s => `${s.host}:${s.port}`).join(', ')}`);
+        console.log(`- REDIS_SENTINEL_HOSTS: ${config.redis.sentinels.map(s => `${s.host}:${s.port}`).join(', ')}`);
         console.log(`- REDIS_SENTINEL_NAME: ${config.redis.name}`);
+        if (config.redis.sentinelPassword) {
+          console.log(`- REDIS_SENTINEL_PASSWORD: ${maskApiKey(config.redis.sentinelPassword)}`);
+        }
       } else {
         console.log(`- REDIS_MODE: single (source: ${config.configSources.redis})`);
         console.log(`- REDIS_HOST: ${config.redis.host}`);
