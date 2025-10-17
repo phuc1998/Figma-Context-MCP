@@ -172,11 +172,15 @@ export class RedisService {
         await this.connect();
       }
 
+      const redisKey = `session:${sessionHash}`;
+
       Logger.log(`Retrieving Figma API key for session hash: ${sessionHash}`);
       
       // ioredis has native TypeScript support and proper return types
-      const apiKey = await this.client.get(sessionHash);
-      
+      const sessionInfo = await this.client.get(redisKey);
+      // Figma API Key is stored in this session info and can be retrieved using key `figma_api_key`
+      const apiKey = sessionInfo ? JSON.parse(sessionInfo).figma_api_key : null;
+
       if (apiKey) {
         Logger.log(`Successfully retrieved API key for session: ${sessionHash}`);
         return apiKey;
