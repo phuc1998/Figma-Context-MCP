@@ -5,7 +5,51 @@ import { Agent, fetch, ProxyAgent } from "undici";
 export type StyleId = `${string}_${string}` & { __brand: "StyleId" };
 
 /**
+ * Check if a URL should bypass the proxy based on NO_PROXY rules
+ */
+function shouldBypassProxy(url: string, noProxy: string): boolean {
+  try {
+    const { hostname } = new URL(url);
+    const noProxyList = noProxy.split(',').map(s => s.trim());
+
+    return noProxyList.some(pattern => {
+      if (pattern === '*') return true;
+      if (pattern.startsWith('.')) {
+        // Match domain and subdomains
+        return hostname === pattern.slice(1) || hostname.endsWith(pattern);
+      }
+      return hostname === pattern;
+    });
+  } catch (error) {
+    console.error("Error checking NO_PROXY rules:", error);
+    return false;
+  }
+}
+
+/**
+ * Get the appropriate dispatcher (proxy or direct) for a given URL
+ */
+function getDispatcher(url: string): ProxyAgent | Agent | undefined {
+  const PROXY = process.env.HTTPS_PROXY ?? process.env.HTTP_PROXY;
+  const NO_PROXY = process.env.NO_PROXY ?? process.env.no_proxy;
+
+  // No proxy configured
+  if (!PROXY) {
+    return undefined;
+  }
+
+  // Check NO_PROXY rules
+  if (NO_PROXY && shouldBypassProxy(url, NO_PROXY)) {
+    return undefined; // Bypass proxy
+  }
+
+  // Use proxy
+  return new ProxyAgent(PROXY);
+}
+
+/**
  * Download Figma image and save it locally
+ * Respects HTTPS_PROXY, HTTP_PROXY, and NO_PROXY environment variables
  * @param fileName - The filename to save as
  * @param localPath - The local path to save to
  * @param imageUrl - Image URL (images[nodeId])
@@ -26,12 +70,13 @@ export async function downloadFigmaImage(
     // Build the complete file path
     const fullPath = path.join(localPath, fileName);
 
-    const PROXY = process.env.HTTPS_PROXY ?? process.env.HTTP_PROXY;
-    const via = PROXY ? new ProxyAgent(PROXY) : new Agent();
+    // Get appropriate dispatcher based on URL and proxy settings
+    const dispatcher = getDispatcher(imageUrl);
+
     // Use fetch to download the image
     const response = await fetch(imageUrl, {
       method: "GET",
-      dispatcher: PROXY ? via : undefined
+      dispatcher
     });
 
     if (!response.ok) {

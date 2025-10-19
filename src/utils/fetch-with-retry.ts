@@ -14,13 +14,52 @@ type RequestOptions = Omit<UndiciInit, "headers"> & {
   headers?: Record<string, string>;
 };
 
+function shouldBypassProxy(url: string, noProxy: string): boolean {
+  try {
+    const { hostname } = new URL(url);
+    const noProxyList = noProxy.split(",").map((s) => s.trim());
+
+    return noProxyList.some((pattern) => {
+      if (pattern === "*") return true;
+      if (pattern.startsWith(".")) {
+        // Match domain and subdomains
+        return hostname === pattern.slice(1) || hostname.endsWith(pattern);
+      }
+      return hostname === pattern;
+    });
+  } catch (error) {
+    console.error("Error checking NO_PROXY rules:", error);
+    return false;
+  }
+}
+
+/**
+ * Get the appropriate dispatcher (proxy or direct) for a given URL
+ */
+function getDispatcher(url: string): ProxyAgent | undefined {
+  const PROXY = process.env.HTTPS_PROXY ?? process.env.HTTP_PROXY;
+  const NO_PROXY = process.env.NO_PROXY ?? process.env.no_proxy;
+
+  // No proxy configured
+  if (!PROXY) {
+    return undefined;
+  }
+
+  // Check NO_PROXY rules
+  if (NO_PROXY && shouldBypassProxy(url, NO_PROXY)) {
+    return undefined; // Bypass proxy
+  }
+
+  // Use proxy
+  return new ProxyAgent(PROXY);
+}
+
 export async function fetchWithRetry<T>(url: string, options: RequestOptions = {}): Promise<T> {
   try {
+    // Get appropriate dispatcher based on URL and proxy settings
+    const dispatcher = options.dispatcher ?? getDispatcher(url);
 
-    const PROXY = process.env.HTTPS_PROXY ?? process.env.HTTP_PROXY;
-    const via = PROXY ? new ProxyAgent(PROXY) : new Agent();
-
-    const response = await fetch(url, { ...options, dispatcher: PROXY ? via : undefined });
+    const response = await fetch(url, { ...options, dispatcher });
 
     if (!response.ok) {
       throw new Error(`Fetch failed with status ${response.status}: ${response.statusText}`);
