@@ -172,18 +172,41 @@ export class RedisService {
         await this.connect();
       }
 
-      const redisKey = `session:${sessionHash}`;
-
       Logger.log(`Retrieving Figma API key for session hash: ${sessionHash}`);
       
-      // ioredis has native TypeScript support and proper return types
-      const sessionInfo = await this.client.get(redisKey);
-      // Figma API Key is stored in this session info and can be retrieved using key `figma_api_key`
-      const apiKey = sessionInfo ? JSON.parse(sessionInfo).figma_api_key : null;
+      // Lua script to get user from session and then get Figma API key from user profile in one atomic operation
+      const luaScript = `
+        local sessionKey = KEYS[1]
+        local sessionData = redis.call('GET', sessionKey)
+        
+        if not sessionData then
+          return nil
+        end
+        
+        local session = cjson.decode(sessionData)
+        local user = session.user
+        
+        if not user then
+          return nil
+        end
+        
+        local userProfileKey = 'user:' .. user .. ':profile'
+        local profileData = redis.call('GET', userProfileKey)
+        
+        if not profileData then
+          return nil
+        end
+        
+        local profile = cjson.decode(profileData)
+        return profile.figma_api_key
+      `;
+
+      const sessionKey = `session:${sessionHash}`;
+      const apiKey = await this.client.eval(luaScript, 1, sessionKey);
 
       if (apiKey) {
         Logger.log(`Successfully retrieved API key for session: ${sessionHash}`);
-        return apiKey;
+        return apiKey as string;
       } else {
         Logger.log(`No API key found for session hash: ${sessionHash}`);
         return null;
